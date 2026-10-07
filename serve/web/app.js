@@ -100,6 +100,9 @@ let health = {model: "strata", images: false, max_context: 0};
 async function loadHealth() {
   try {
     health = await (await fetch("health")).json();
+    modelName = health.model || modelName;                                   // the idle tab title names the model
+    if (!statusShown) document.title = modelName;    // no status yet: the tab says which model this is (its full
+    // name; the server writes the same one into the page)
     $("attach-btn").title = health.images ? "Attach a text file or a picture (or drop it here)"
                                           : "Attach a text file (or drop it here)";
     $("chat-empty-sub").textContent = `${health.model} runs on this PC. Nothing leaves it.`;
@@ -172,20 +175,41 @@ async function poll() {
   setTimeout(poll, 1000);
 }
 
+// The header badge's words are the page title too, so the browser tab shows what the model is doing without
+// opening the page.  While the model is idle the tab says which model this is instead: the last segment of its
+// name (qwen3.8-flash-next-iq3_xxs -> "iq3_xxs - Idle").
+const nameTail = (name) => String(name || "").split("-").filter(Boolean).pop() || "";
+const tps = (v) => (v == null ? null : fmt(v, v >= 1000 ? 0 : 1));      // 2,148 TPS · 47.3 TPS
+const TOOL_CALL = "writing a tool call: ";   // the server's phase text while a tool call is being written
+let modelName = "", statusShown = false;
 function setPill(state, text) {
   $("pill").dataset.state = state === "error" ? "queued" : state;
   $("pill-text").textContent = text;
+  statusShown = true;
+  const idleTag = state === "idle" ? nameTail(modelName) : "";
+  document.title = idleTag ? `${idleTag} - ${text}` : text;
 }
 
 function render(m) {
   const live = m.live || {}, hw = m.hardware || {}, st = m.hardware_static || {}, eng = m.engine || {}, h = m.history || {};
   const last = (m.requests || [])[0];
-  // the header pill
+  // the header pill: while the prompt is read, the read rate and how far it got; while tokens come out, what the
+  // model is doing with them (its thinking, its answer, the tool it is calling) and how fast.  Neither says a bare
+  // word: before the first numbers arrive it names the step it is in instead ("Routing Experts...").
+  if (eng.model) modelName = eng.model;
   if (live.state === "reading") {
     const pct = live.prompt_total ? Math.round((100 * live.prompt_read) / live.prompt_total) : null;
-    setPill("reading", pct != null ? `Reading prompt · ${pct}%` : "Reading prompt");
+    const prefill = tps(live.prefill_tok_s_mean);
+    const step = live.phase && live.phase !== "reading the prompt"                   // a session save/restore step
+      ? live.phase[0].toUpperCase() + live.phase.slice(1) : null;
+    setPill("reading", step || (prefill == null && pct == null ? "Routing Experts..."
+      : `Prompt${prefill == null ? "" : ` ${prefill} TPS`}${pct == null ? "" : ` (${pct}%)`}`));
   } else if (live.state === "generating") {
-    setPill("generating", `Generating · ${fmt(live.tok_s, 1)} tok/s`);
+    const decode = tps(live.tok_s);
+    // the tool's own name is too long to fit beside the rate, so the badge just says Tool
+    const doing = live.phase === "thinking" ? "Thinking:" : live.phase === "answering" ? "Answer:"
+      : String(live.phase || "").startsWith(TOOL_CALL) ? "Tool:" : "Generating:";
+    setPill("generating", `${doing} ${decode == null ? "–" : decode} TPS`);
   } else {
     setPill("idle", "Idle");
   }

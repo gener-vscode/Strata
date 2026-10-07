@@ -1641,6 +1641,15 @@ def landing_meta(landing: str) -> str:
     return "" if not landing else f'<meta name="strata-landing" content="{landing}">\n'
 
 
+def page_title(body: bytes, model: str) -> bytes:
+    """The app page's tab title before its script knows anything: the model's full name (the run config's
+    "model_name"), so a tab left open says which model it is from the first moment.  From the page's first status
+    on its own script keeps the title and the status badge the same words (serve/web/app.js).  A page with no
+    <title> comes back unchanged."""
+    safe = str(model).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return re.sub(rb"<title>.*?</title>", lambda _: f"<title>{safe}</title>".encode(), body, count=1)
+
+
 class Vision:
     """The resident image encoder: `strata-vision` (llama.cpp mtmd + the mmproj file) reads `ENC <image> <out>`
     lines and writes each image's embeddings; results are cached by the image's hash, so a conversation that
@@ -3921,6 +3930,7 @@ def make_handler(svc: Service):
                 body = (ROOT / "serve" / "web" / ("monitor.html" if path else "index.html")).read_bytes()
                 if not path:                       # the app page carries the tab its config asks it to open on
                     body = body.replace(b"</head>", (landing_meta(svc.landing) + "</head>").encode(), 1)
+                    body = page_title(body, svc.model)      # the tab names this model, before its script runs
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
