@@ -20,7 +20,17 @@ QUESTIONS = [
     "Explain how a transformer's attention works, step by step.",
     "Donne une recette de tarte aux pommes, etape par etape.",
     "Describe the life cycle of a star like the Sun.",
+    "Erklaere ausfuehrlich, wie ein Dieselmotor funktioniert.",
+    "Write a Rust function that parses a CSV line with quoted fields, then explain it.",
+    "What were the main consequences of the invention of the printing press?",
+    "Explique le theoreme de Pythagore avec trois demonstrations differentes.",
+    "Describe how the immune system responds to a viral infection.",
+    "Explain the difference between processes and threads in an operating system.",
+    "Beschreibe die Geschichte des Roemischen Reiches in Grundzuegen.",
+    "How does public-key cryptography work? Give an example with RSA.",
 ]
+# more than 16 slots: the same questions again, asked to answer in German
+QUESTIONS = QUESTIONS + [q + " Answer in German." for q in QUESTIONS]
 
 
 def tokenizer(path):
@@ -75,6 +85,9 @@ def main():
     ap.add_argument("--keys", default="", help='sampling keys for every request, e.g. "temperature=0.7 top_k=20"')
     ap.add_argument("--extra", default="", help='more engine arguments in one string, e.g. "--adapt-every 1000000"')
     ap.add_argument("--dump", default="", help="write every slot's tokens (solo and batch) as JSON: an A/B of two engine builds")
+    ap.add_argument("--long-tokens", type=int, default=0,
+                    help="the LAST prompt is read from about this many tokens of filler text first: its chunks run "
+                         "beside the earlier slots' windows (the prompt path lends experts then)")
     ap.add_argument("--mt-min", default="1", help="STRATA_IQ_MT_MIN for the engine (1: exact; empty: the default)")
     a = ap.parse_args()
     cfg = json.loads(Path(a.config).read_text())
@@ -82,6 +95,12 @@ def main():
     prompts = []
     for q in QUESTIONS[: a.n]:
         text = f"<|im_start|>user\n{q}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+        if a.long_tokens and q is QUESTIONS[a.n - 1]:
+            para = ("The committee reviewed item %d of the long agenda, noting the budget, the schedule and the open "
+                    "risks, and asked the staff to report back next quarter. ")
+            per = max(1, len(tok.encode(para % 100)))
+            filler = "".join(para % i for i in range(a.long_tokens // per + 1))
+            text = f"<|im_start|>user\n{filler}\n\n{q}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
         prompts.append(tok.encode(text, parse_special=True))
     env = {"STRATA_DECODE_TIMING": "1", **({"STRATA_VERIFY_PROFILE": "1"} if os.environ.get("PROF") else {})}
     if a.mt_min:

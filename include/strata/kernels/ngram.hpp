@@ -49,20 +49,21 @@ inline constexpr int PLE_ROW_BYTES_FP8 = PLE_HEAD_DIM;                   // 160:
 inline constexpr int PLE_ROW_BYTES_Q5_1 = (PLE_HEAD_DIM / 32) * 24;     // 120: a Q5_1 row (a Q5_K_M finetune)
 inline constexpr int PLE_ROW_BYTES_Q8_0 = (PLE_HEAD_DIM / 32) * 34;     // 170: a Q8_0 row (UD-Q6_K_XL, Swift-1.5 Q4_K_L)
 inline constexpr int PLE_ROW_BYTES_BF16 = PLE_HEAD_DIM * 2;             // 320: a BF16 row, two bytes a value
+inline constexpr int PLE_ROW_BYTES_NVFP4 = PLE_HEAD_DIM / 2 + PLE_HEAD_DIM / 16;   // 90: 80 B of E2M1 codes + 10 E4M3 block scales
 inline constexpr int PLE_ROW_BYTES_MAX = PLE_ROW_BYTES_BF16;             // the widest row any format in `ple_formats()` has
 
 /// THE FORMATS OF THE TABLE, ONE ROW EACH. A table type is one entry here (its GGUF type name, the bytes of one
 /// 160-value row, how to turn a row into floats) and nothing else: `PleTable::open`, `format()`, the reader's row size,
 /// the error string and the buffers' size all read this list, so a new format cannot be in one switch and missing from
 /// another. A row is always `PLE_HEAD_DIM` = 160 values = 5 blocks of 32 for the block formats.
-enum class PleFormat : uint8_t { IQ4_NL, Q5_0, F8_E4M3, Q5_1, Q8_0, Q4_0, BF16 };
+enum class PleFormat : uint8_t { IQ4_NL, Q5_0, F8_E4M3, Q5_1, Q8_0, Q4_0, BF16, NVFP4 };
 
 struct PleFormatInfo {
     PleFormat id;
     const char* name;          ///< what `PleTable::format()` returns
     const char* gguf_type;     ///< `TensorInfo::type_name()` of the table tensor ("I8" for F8_E4M3: GGUF has no FP8 type)
     uint32_t row_bytes;        ///< bytes of one 160-value row in the file
-    bool needs_scale;          ///< the table has one scale in the GGUF metadata (`strata.ple.scale`), F8_E4M3 only
+    bool needs_scale;          ///< the table has one scale in the GGUF metadata (`strata.ple.scale`): F8_E4M3 and NVFP4
     void (*dequant)(const uint8_t* row, float scale, float* out160);
 };
 
@@ -153,7 +154,8 @@ struct PleIoOptions {
                                      ///< ~335 MB (BF16); 0 disables
     bool io_thread = true;           ///< reads submitted by a worker thread, not the caller
     /// Mmap mode only (`--ple-io ram`): lock the whole mapped table in RAM at open, so no SSD read ever sits on
-    /// the prompt or token path. Needs RAM for the full table. POSIX only (mlock); `locked()` reports the outcome.
+    /// the prompt or token path. Needs RAM for the full table (28.8 GB IQ4_NL, 51.2 GB FP8). mlock on POSIX,
+    /// the process working-set minimum plus VirtualLock on Windows; `locked()` reports the outcome.
     bool lock = false;
     /// Direct mode with the I/O worker only: keep the SSD awake while rows are asked for - one page of the table
     /// after this long without a read (0 = off), until `keepalive_window_s` after the last request for rows
@@ -197,7 +199,7 @@ public:
     bool open(const std::string& gguf_path, std::string& err);
     void close();
     bool is_open() const;
-    /// True when `PleIoOptions::lock` was asked for and mlock succeeded (false: pages only pre-touched).
+    /// True when `PleIoOptions::lock` was asked for and the OS lock succeeded (false: pages only pre-touched).
     bool locked() const;
     uint64_t rows() const;
     /// "IQ4_NL" or "F8_E4M3" (a GGUF from tools/ple_fp8_pack.py: type I8, strata.ple.format = f8_e4m3).

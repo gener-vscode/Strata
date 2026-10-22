@@ -13,9 +13,16 @@
 namespace strata::core {
 
 NativeHead::~NativeHead() {
+    unload();
+}
+
+void NativeHead::unload() {
     if (weights_) strata::kernels::native_q6_k_unpack(weights_);
+    if (weights_) strata::kernels::native_q8_0_sm60_release(weights_);
     if (scratch_) cudaFree(scratch_);
     if (weights_) cudaFree(weights_);
+    scratch_ = nullptr;
+    weights_ = nullptr;
 }
 
 bool NativeHead::load(const std::vector<std::string>& shards, int64_t n_in, int64_t n_out, std::string& err) {
@@ -28,7 +35,7 @@ bool NativeHead::load(const std::vector<std::string>& shards, int64_t n_in, int6
         // The architecture is the metadata shard's; output.weight comes from whichever shard holds it (shard 2
         // of Unsloth's UD-Q4_K_XL, whose shard 1 holds no tensor).  GgufModel refuses a duplicate across shards.
         const strata::GgufModel model(shards);
-        err = strata::check_architecture(model.meta());
+        err = strata::check_engine_architecture(model.meta());
         if (!err.empty()) return false;
         size_t at = 0;
         const strata::TensorInfo* tensor = model.find("output.weight", &at);
@@ -59,6 +66,7 @@ bool NativeHead::load(const std::vector<std::string>& shards, int64_t n_in, int6
             return false;
         }
         weights_ = weights;
+        { int d = -1; if (cudaGetDevice(&d) == cudaSuccess) device_ = d; }
         scratch_ = scratch;
         bytes_ = bytes;
         n_in_ = (int) n_in;
@@ -66,6 +74,8 @@ bool NativeHead::load(const std::vector<std::string>& shards, int64_t n_in, int6
         type_ = (int) tensor->type;
         if (type_ == 14 && strata::kernels::native_q6_k_packed_enabled())   // STRATA_Q6_PACKED=1
             strata::kernels::native_q6_k_pack(weights_, n_in_, n_out_, "output head");
+        if (type_ == 8)   // STRATA_Q8_SM60=1 (a no-op otherwise); the MTP draft head reads the same matrix
+            strata::kernels::native_q8_0_sm60_pack(weights_, n_in_, n_out_, "output head");
         return true;
     } catch (const std::exception& error) {
         err = std::string("native head: ") + error.what();
@@ -115,7 +125,7 @@ bool NativeEmbed::load(const std::vector<std::string>& shards, int64_t n_embd, i
         const strata::GgufModel model(shards);
         // --embd-gguf's one-tensor file (tools/embd_bf16_pack.py) says "strata-embd": only its tensor is checked
         const strata::MetaValue* arch = model.meta().get("general.architecture");
-        err = arch != nullptr && arch->s == "strata-embd" ? std::string() : strata::check_architecture(model.meta());
+        err = arch != nullptr && arch->s == "strata-embd" ? std::string() : strata::check_engine_architecture(model.meta());
         if (!err.empty()) { err = "native embedding: " + err; return false; }
         size_t at = 0;
         const strata::TensorInfo* t = model.find("token_embd.weight", &at);
@@ -136,7 +146,8 @@ bool NativeEmbed::load(const std::vector<std::string>& shards, int64_t n_embd, i
             return false;
         }
         strata::platform::advise_willneed(gguf.tensor_data(*t), bytes_);   // copied out of the mapping below
-        if (cudaHostAlloc(&host_, bytes_, cudaHostAllocMapped | cudaHostAllocPortable) != cudaSuccess) {
+        cudaError_t host_err = cudaHostAlloc(&host_, bytes_, cudaHostAllocMapped | cudaHostAllocPortable);
+        if (host_err != cudaSuccess) {
             // Under WSL2 the driver's pinned/mapped host budget (~1 GiB) can be spent by the GPU contexts
             // themselves (three cards). The table is only gathered from, so keep it in the current device's VRAM
             // instead: it costs its size there and reads faster than over PCIe.
@@ -147,7 +158,8 @@ bool NativeEmbed::load(const std::vector<std::string>& shards, int64_t n_embd, i
                 cudaMemcpy(d, gguf.tensor_data(*t), bytes_, cudaMemcpyHostToDevice) != cudaSuccess) {
                 if (d) cudaFree(d);
                 cudaGetLastError();
-                err = "native embedding: cannot pin " + std::to_string(bytes_ >> 20) + " MiB, nor place it in VRAM";
+                err = "native embedding: cannot pin " + std::to_string(bytes_ >> 20) + " MiB: " +
+                      cudaGetErrorString(host_err) + ", nor place it in VRAM";
                 return false;
             }
             std::fprintf(stderr, "strata: native embedding: cannot pin %llu MiB, kept in VRAM instead\n",

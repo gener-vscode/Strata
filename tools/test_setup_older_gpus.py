@@ -135,7 +135,7 @@ class BuildTools(unittest.TestCase):
             seen.append(below)
             return nvcc(below)
 
-        with mock.patch.object(setup, "find_nvcc", find), mock.patch.object(setup, "find_vcvars", lambda: "vcvars"), \
+        with mock.patch.object(setup, "find_nvcc", find), mock.patch.object(setup, "find_vcvars", lambda cuda_v=None: "vcvars"), \
                 mock.patch.object(setup.shutil, "which", lambda n: "/usr/bin/" + n):
             got, text = quiet(setup.install_build_tools, gpu, True)
         return got, seen, text
@@ -163,6 +163,7 @@ def fake_prebuilt(calls):
         (eng / "BUILD.json").write_text(json.dumps({"version": "0.1.39", "source": "release", "archs": [86], "ptx": True,
                                                     "cuda": "12.9" if toolkit == 12 else "13.0", "vision": "gpu"}))
         (eng / setup.EXE).write_bytes(b"")
+        (eng / setup.VEXE).write_bytes(b"")                    # pictures are on by default: the engine carries the reader
         return eng
     return get
 
