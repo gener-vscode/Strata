@@ -59,6 +59,8 @@ build-vision-cuda12.bat
 .idea/
 .cursor/
 
+bak/
+.agents/
 /.ccache/
 /.rocm-win/
 bak/*
