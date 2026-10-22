@@ -112,18 +112,13 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
 
 let tab = "chat";
 function showTab(name) {
-<<<<<<< HEAD
-  tab = ["chat", "monitor", "logs", "about"].includes(name) ? name : "chat";
+  tab = ["chat", "images", "monitor", "logs", "about"].includes(name) ? name : "chat";
   for (const b of document.querySelectorAll(".st-tab")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
-  for (const v of ["chat", "monitor", "logs", "about"]) $(`view-${v}`).hidden = v !== tab;
-  if (location.hash.slice(1) !== tab) history.replaceState(null, "", `#${tab}`);   // every view has its own address
-=======
-  tab = ["chat", "images", "monitor", "about"].includes(name) ? name : "chat";
-  for (const b of document.querySelectorAll(".st-tab")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
-  for (const v of ["chat", "images", "monitor", "about"]) $(`view-${v}`).hidden = v !== tab;
+  for (const v of ["chat", "images", "monitor", "logs", "about"]) $(`view-${v}`).hidden = v !== tab;
   if (tab === "images") $("img-prompt").focus();
+  // every view has its own address except chat, which is the page itself - with an app path ("dashboard") that keeps
+  // the address at /ui/ rather than /ui/#chat, which is what the config's "landing" and a bookmark both expect
   if (location.hash.slice(1) !== tab) history.replaceState(null, "", tab === "chat" ? location.pathname : `#${tab}`);
->>>>>>> main
   if (tab === "chat") $("input").focus();
   if (tab === "monitor") loadMcp();
   if (tab === "logs") loadLogs();

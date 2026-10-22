@@ -1,0 +1,48 @@
+{
+ "exe": "/home/tommy/repo/Strata/engine/strata",
+ "args": [
+
+  "--pack", "/home/tommy/repo/Strata-data/packs/iq3_s",
+  "--native",   "/home/tommy/repo/Strata-data/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+  "--ple-gguf", "/home/tommy/repo/Strata-data/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
+  "--expert-profile", "/home/tommy/repo/Strata/data/expert-profile.bin",
+  "--expert-cache", "auto",
+  "--prefill", "auto",
+  "--spec", "4",
+  "--spec-min-p", "0.7",
+  "--mtp", "/home/tommy/repo/Strata-data/mtp/rt",
+  "--max-context", "160000",
+  "--kv", "q4_0",
+  "--vram-reserve-mib", "384",
+  "--control-vector-scaled", "/home/tommy/repo/Strata/data/experimental-speed-projection/Qwen3.8-Flash-Next-experimental-speed-projection.gguf:1.0",
+  "--control-vector-layer-range", "4", "44",
+  "--cvec-mode", "project",
+  "--cvec-dir", "per-layer",
+  "--resident-experts",
+  "--vision"
+ ],
+ "cwd": "/home/tommy/repo/Strata",
+ "tokenizer": "/home/tommy/repo/Strata-data/packs/iq3_s/tokenizer",
+ "model_name": "qwen3.8-flash-next-iq3_s",
+ "log": "/home/tommy/repo/Strata/strata-iq3_s.log",
+ "lib_dirs": [
+  "/opt/rocm/lib"
+ ],
+ "backend": "hip",
+ "env": {
+  "STRATA_HIPBLASLT_TUNING": "/home/tommy/repo/Strata/tools/hip/gfx1100-hipblaslt-100202.txt",
+  "STRATA_RESIDENT_PIN": "0"
+ },
+ "vision": {
+  "exe": "/home/tommy/repo/Strata/engine/strata-vision",
+  "mmproj": "/home/tommy/repo/Strata-data/models/mmproj-Qwen3.8-Flash-Next-BF16.gguf",
+  "model": "/home/tommy/repo/Strata-data/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+  "gpu": false,
+  "max_tokens": 1024,
+  "threads": 16
+ },
+"host": "0.0.0.0",
+"port": 8080,
+"dashboard": "/ui",
+"landing": "#monitor"
+}

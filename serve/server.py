@@ -514,7 +514,6 @@ def start_log_tail(log: str | None, offset: int, n: int = 20) -> str:
     return "\nthe engine log's last lines:\n" + "\n".join("  " + x for x in lines)
 
 
-<<<<<<< HEAD
 LOG_STREAM_MAX_BYTES = 262144
 
 
@@ -564,7 +563,8 @@ def engine_log_stream(log_path: str | None, after=None, max_bytes: int = LOG_STR
     data = data[:cut + 1]
     lines = [line.rstrip() for line in data.decode("utf-8", "replace").splitlines()]
     return respond(start + len(data), lines, True)
-=======
+
+
 # Windows NTSTATUS exit codes of a process the system ended (a crash, not an error the engine reported)
 _WIN_CRASH = {0xC000001D: "illegal instruction (the CPU lacks an instruction the program uses)",
               0xC0000005: "access violation", 0xC0000409: "stack buffer overrun / fast-fail",
@@ -685,7 +685,6 @@ def transient_start_failure(log: str | None, offset: int, elapsed_s: float, rc: 
     # must not call it a GPU runtime start (#2324: an old CPU's illegal instruction was retried 3 times as "GPU
     # runtime" and the real reason never shown)
     return not engine_lines and rc != 1 and not engine_crashed(rc)
->>>>>>> main
 
 
 def echo_requests(log_path: str, offset: int) -> None:
@@ -2541,7 +2540,6 @@ def network_path(path: str) -> bool:
     return p.startswith("\\\\") or p.startswith("\\??\\")
 
 
-<<<<<<< HEAD
 # the paths this server answers itself, so a chosen app path must not be one of them
 SERVED_PATHS = ("/web", "/fonts", "/v1", "/api", "/metrics", "/health", "/status", "/slots", "/models", "/props",
                 "/mcp", "/config", "/settings", "/unload", "/load", "/api-monitor")
@@ -2598,7 +2596,8 @@ def page_title(body: bytes, model: str) -> bytes:
     <title> comes back unchanged."""
     safe = str(model).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     return re.sub(rb"<title>.*?</title>", lambda _: f"<title>{safe}</title>".encode(), body, count=1)
-=======
+
+
 def vision_start_error(line: str, log=None) -> str:
     """The message when the image encoder answered something other than READY.  #1445: a card in the Exclusive_Process
     compute mode (or one another process holds) refuses the encoder's CUDA context with "busy or unavailable"; that
@@ -2622,7 +2621,6 @@ def vision_start_error(line: str, log=None) -> str:
                 "--format=csv; set it back with: sudo nvidia-smi -c DEFAULT (or run the encoder on another card). "
                 "First line from the encoder: " + (text or "(none)"))
     return "the vision encoder did not start: " + text
->>>>>>> main
 
 
 class Vision:
@@ -3820,12 +3818,10 @@ class Service:
         # "parallel" (the engine's batch slots): every running request's own status and rate window; self.status
         # then says busy while any runs and shows the newest one
         self.live_reqs: dict[int, tuple[dict, collections.deque]] = {}
-<<<<<<< HEAD
         # the path the web app is served under: "" for / as always, "/ui" for the run config's "dashboard"; and
         # which tab the page opens on: "" for chat as always, "#monitor" for the config's "landing"
         self.dashboard = ""
         self.landing = ""
-=======
         # Privacy-safe correlation for terminal telemetry. No prompts, client identity or tool text is stored.
         self.terminal_requests: dict[str, dict] = {}
         self.terminal_events = collections.deque(maxlen=128)  # fixed-shape request transitions only
@@ -3840,7 +3836,6 @@ class Service:
         self.client_disconnect_cancels = 0
         self.draining = False
         self.active_cancels: set[threading.Event] = set()
->>>>>>> main
         # #332: the API request monitor (/api-monitor) keeps the last 100 requests' prompts and answers in memory,
         # so it is off unless the config's "api_monitor" (or --api-monitor) turns it on
         self.api_monitor = False
@@ -4591,11 +4586,10 @@ class Service:
                 "hardware_static":
                 tel["static"], "history": tel["history"], "time": now}
 
-<<<<<<< HEAD
     def logs(self, after=None) -> dict:
         """GET /logs: the engine log stream the web app's Log Stream tab reads."""
         return engine_log_stream(getattr(self.engine, "log_path", None), after)
-=======
+
     def prometheus(self) -> str:
         """GET /metrics/prometheus: the totals and what is running in Prometheus' text format, under llama-server's
         metric names (llamacpp:*) so its dashboards work unchanged; the drafts and requests as strata:*."""
@@ -4631,7 +4625,6 @@ class Service:
         ]
         return "".join(f"# HELP {name} {help_}\n# TYPE {name} {kind}\n{name} {value}\n"
                        for name, kind, help_, value in rows)
->>>>>>> main
 
     def v1_status(self) -> dict:
         """GET /v1/status: what this server is and does, for a client that would rather ask than guess (a front-end
@@ -6269,7 +6262,6 @@ def make_handler(svc: Service):
             self._json(401, {"error": {"type": "authentication_error", "message": "missing or wrong API key"}})
             return False
 
-<<<<<<< HEAD
         def _route(self) -> str | None:
             """The request's path for the routes below, with the app's own path (the config's "dashboard") taken off
             the front - or None when that path has moved and this request is not under it.  Only the page and the
@@ -6307,7 +6299,7 @@ def make_handler(svc: Service):
             else:
                 self._json(404, {"error": {"message": f"not found - Strata's web page is at {svc.dashboard}/ "
                                                       "(its API answers at / as usual)"}})
-=======
+
         def _authorized_telemetry(self) -> bool:
             if not svc.api_key and not svc.telemetry_key:
                 return True
@@ -6318,7 +6310,6 @@ def make_handler(svc: Service):
                 return True
             self._json(401, {"error": {"type": "authentication_error", "message": "missing or wrong telemetry key"}})
             return False
->>>>>>> main
 
         def do_GET(self):
             path = self._route()
@@ -6684,15 +6675,11 @@ def make_handler(svc: Service):
         def _post(self):
             if not self._authorized():
                 return
-<<<<<<< HEAD
             path = self._route()                        # issue #55: Claude Code posts /v1/messages?beta=true
             if path is None:
                 self._not_our_app()
                 return
-=======
-            path = self.path.split("?")[0].rstrip("/")   # issue #55: Claude Code posts /v1/messages?beta=true
             path = V1_V1_ALIASES.get(path, path)         # an Anthropic client given ".../v1" as its base posts /v1/v1/messages
->>>>>>> main
             if path.startswith("/v1/") and self._foreign_page():
                 return
             if path == "/settings":
@@ -8181,16 +8168,6 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
     ap.add_argument("--slot-save-path", default=None, metavar="DIR",
                     help="enable POST /slots/0?action=save|restore {\"filename\": NAME} (llama-server's API): the "
                          "conversation the engine holds, to or from DIR/NAME (also \"slot_save_path\" in the config)")
-<<<<<<< HEAD
-    a = ap.parse_args()
-    cfg = json.loads(Path(a.config).read_text(encoding="utf-8-sig")) if a.config else {}   # Notepad adds a BOM
-    try:
-        dashboard = dashboard_of(a.dashboard or cfg.get("dashboard"), '--dashboard / the config\'s "dashboard"')
-        landing = landing_of(a.landing if a.landing is not None else cfg.get("landing"),
-                             '--landing / the config\'s "landing"')
-    except ValueError as e:
-        ap.error(str(e))
-=======
     ap.add_argument("--replicas", type=int, default=None, metavar="N",
                     help="data-parallel replicas (opt-in): cut the \"gpu\" list into N equal groups and run one engine on "
                          "each, requests spread over them (also \"replicas\" in the config: a number, or "
@@ -8268,7 +8245,14 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
     lift_reasoning_effort_arg(cfg)
     if a.replicas is not None:
         cfg["replicas"] = a.replicas
->>>>>>> main
+    # the page's own path ("dashboard") and the tab it opens on ("landing"): checked here, like the config's other
+    # values, so a wrong one stops the start with the name of what is expected instead of leaving no page to open
+    try:
+        dashboard = dashboard_of(a.dashboard or cfg.get("dashboard"), '--dashboard / the config\'s "dashboard"')
+        landing = landing_of(a.landing if a.landing is not None else cfg.get("landing"),
+                             '--landing / the config\'s "landing"')
+    except ValueError as e:
+        ap.error(str(e))
     if a.gpu is not None:
         cfg["gpu"] = int(a.gpu) if a.gpu.strip().isdigit() else a.gpu
     a.host = a.host or cfg.get("host") or "127.0.0.1"   # issue #26: the run scripts pass no --host, the config can
@@ -8591,33 +8575,20 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
     svc.start_idle_unload()
     svc.start_vision_idle()
     here = "127.0.0.1" if a.host in ("0.0.0.0", "", "::") else a.host
-<<<<<<< HEAD
-    page = f"http://{here}:{a.port}{dashboard or ''}/{landing}"
-    print(f"ready: http://{here}:{a.port}/v1  (OpenAI: /v1/chat/completions, Anthropic: /v1/messages, "
-          f"context {engine.max_context} tokens{', images on' if vision else ''}"
-          f"{', API key required' if svc.api_key else ''})", flush=True)
-    print(f"       open {page} in a browser to chat; close this window to stop the model", flush=True)
-=======
+    page = f"http://{here}:{bound_port}{dashboard or ''}/{landing}"
     print(f"ready: http://{here}:{bound_port}/v1  (OpenAI: /v1/chat/completions, Anthropic: /v1/messages, "
           f"context {engine.max_context} tokens{', images on' if vision else ''}"
           f"{', API key required' if svc.api_key else ''})", flush=True)
-    print(f"       open http://{here}:{bound_port}/ in a browser to chat; close this window to stop the model", flush=True)
->>>>>>> main
+    print(f"       open {page} in a browser to chat; close this window to stop the model", flush=True)
     if a.host not in ("127.0.0.1", "localhost", "::1"):
         # issue #26: reachable from other devices - say at which address, and what can still block it
         ips = lan_addresses()
         for ip in ips:
-<<<<<<< HEAD
-            print(f"       from other devices: http://{ip}:{a.port}{dashboard or ''}/{landing}   "
-                  f"(API: http://{ip}:{a.port}/v1)", flush=True)
+            print(f"       from other devices: http://{ip}:{bound_port}{dashboard or ''}/{landing}   "
+                  f"(API: http://{ip}:{bound_port}/v1)", flush=True)
         if not ips:
-            print("       from other devices: http://<this PC's IP address>:" + str(a.port) +
+            print("       from other devices: http://<this PC's IP address>:" + str(bound_port) +
                   f"{dashboard or ''}/{landing} (API: /v1)", flush=True)
-=======
-            print(f"       from other devices: http://{ip}:{bound_port}/   (API: http://{ip}:{bound_port}/v1)", flush=True)
-        if not ips:
-            print("       from other devices: http://<this PC's IP address>:" + str(bound_port) + "/", flush=True)
->>>>>>> main
         if not svc.api_key:
             print("       WARNING: " + open_server_warning(bound_port, tools=svc.mcp is not None),
                   flush=True)
@@ -8628,22 +8599,9 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
                   "       (and set this network to Private in Windows' network settings)", flush=True)
     if a.open and cfg.get("open_browser") is not False:   # #609: the config's "open_browser": false wins (an older
         import webbrowser                                  # run-<model>.bat still passes --open)
-<<<<<<< HEAD
-        webbrowser.open(page)
-    # #96: docker stop sends SIGTERM, which Python ignores by default, so the container's PID 1 would be killed after
-    # the grace period with the engine still running. SIGTERM takes Ctrl+C's path below (QUIT to the engine).
-    # SIGINT keeps Python's own handler, so Ctrl+C and a second Ctrl+C work as before.
-    def on_sigterm(signum, frame):
-        raise KeyboardInterrupt
-    try:
-        signal.signal(signal.SIGTERM, on_sigterm)
-    except (ValueError, OSError, AttributeError):         # not the main thread
-        pass
-=======
         # on its own thread: webbrowser.open waits for the browser launcher, which on Linux can run for as long as
         # the browser does, and the main thread must be free to take Ctrl+C and SIGTERM (#1872)
-        threading.Thread(target=webbrowser.open, daemon=True, name="strata-open-browser",
-                         args=(f"http://{'127.0.0.1' if a.host in ('0.0.0.0', '') else a.host}:{bound_port}/",)).start()
+        threading.Thread(target=webbrowser.open, daemon=True, name="strata-open-browser", args=(page,)).start()
     if ready_path is not None or event_sink is not None:
         ready_host = f"[{here}]" if ":" in here and not here.startswith("[") else here
         record = {"schema_version": 1, "instance_id": svc.instance_id, "pid": os.getpid(),
@@ -8664,7 +8622,6 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
         notify_lifecycle("ready", record)
     interrupted = False
     drained = True
->>>>>>> main
     try:
         while True:
             time.sleep(1)                               # Windows never delivers Ctrl+C to an untimed Event.wait()
