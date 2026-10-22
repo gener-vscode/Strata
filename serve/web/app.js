@@ -53,6 +53,45 @@ async function copyText(text, btn) {
   toast("success", "Copied to clipboard", "", 1800);
 }
 
+// ------------------------------------------------------------------ log stream
+const LOG_VIEW_MAX_LINES = 800;
+let logCursor = null, logLines = [], logAutoShow = store.get("log-follow", true);
+
+function logStatus(text) { $("log-status").textContent = text; }
+function paintLog() { $("log-stream").textContent = logLines.join("\n"); }
+function setLogAutoShow(on) { logAutoShow = !!on; $("log-follow").setAttribute("aria-checked", String(logAutoShow)); store.set("log-follow", logAutoShow); }
+
+async function loadLogs() {
+  const box = $("log-stream");
+  const near = box.scrollHeight - box.scrollTop - box.clientHeight < 70;
+  try {
+    const query = logCursor === null ? "" : "?after=" + encodeURIComponent(logCursor);
+    const r = await fetch("logs" + query, { headers: headers() });
+    const d = {};
+    try { Object.assign(d, await r.json()); } catch (_) { }
+    if (r.status === 401) { logStatus("This server needs an API key. Add it under About > Settings."); return; }
+    if (!r.ok) { logStatus("Log stream not available: " + ((d.error && d.error.message) || ("HTTP " + r.status))); return; }
+    if (!d.available) { logStatus("No engine log file is configured."); return; }
+    if (typeof d.cursor === "number") logCursor = d.cursor;
+    const lines = d.lines || [];
+    if (lines.length) {
+      logLines.push(...lines);
+      if (logLines.length > LOG_VIEW_MAX_LINES) logLines.splice(0, logLines.length - LOG_VIEW_MAX_LINES);
+      paintLog();
+      if (logAutoShow && near) box.scrollTop = box.scrollHeight;
+    }
+    logStatus(`${d.file || "engine log"} · ${logLines.length} line${logLines.length === 1 ? "" : "s"} in view`);
+  } catch (e) {
+    logStatus("Could not read the log stream: " + (e && e.message ? e.message : String(e)));
+  }
+}
+
+setLogAutoShow(logAutoShow);
+$("log-follow").onclick = () => { logAutoShow = !logAutoShow; setLogAutoShow(logAutoShow); };
+$("log-copy").onclick = () => copyText(logLines.length ? logLines.join("\n") + "\n" : "");
+$("log-clear-view").onclick = () => { logLines = []; paintLog(); logStatus("Log view cleared. New engine log lines will appear below."); };
+$("log-reset-tail").onclick = () => { logCursor = null; logLines = []; paintLog(); logStatus("Reading the latest log tail…"); loadLogs(); };
+
 // ------------------------------------------------------------------ theme and tabs
 // the system's theme until the user picks one (only a click is saved)
 function setTheme(t, save) {
@@ -73,12 +112,13 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
 
 let tab = "chat";
 function showTab(name) {
-  tab = ["chat", "monitor", "about"].includes(name) ? name : "chat";
+  tab = ["chat", "monitor", "logs", "about"].includes(name) ? name : "chat";
   for (const b of document.querySelectorAll(".st-tab")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
-  for (const v of ["chat", "monitor", "about"]) $(`view-${v}`).hidden = v !== tab;
+  for (const v of ["chat", "monitor", "logs", "about"]) $(`view-${v}`).hidden = v !== tab;
   if (location.hash.slice(1) !== tab) history.replaceState(null, "", `#${tab}`);   // every view has its own address
   if (tab === "chat") $("input").focus();
   if (tab === "monitor") loadMcp();
+  if (tab === "logs") loadLogs();
   if (tab === "about") loadConfig();
   if (lastMetrics) render(lastMetrics);
 }
@@ -172,6 +212,7 @@ async function poll() {
     if (++metricsFailures === 3) setPill("error", "Server not reachable");
   }
   if (tab === "monitor" && ++mcpTick % 10 === 0) loadMcp();       // server states change rarely: every 10 s
+  if (tab === "logs") loadLogs();
   setTimeout(poll, 1000);
 }
 

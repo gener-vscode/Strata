@@ -349,6 +349,57 @@ def start_log_tail(log: str | None, offset: int, n: int = 20) -> str:
     return "\nthe engine log's last lines:\n" + "\n".join("  " + x for x in lines)
 
 
+LOG_STREAM_MAX_BYTES = 262144
+
+
+def engine_log_stream(log_path: str | None, after=None, max_bytes: int = LOG_STREAM_MAX_BYTES) -> dict:
+    """Read complete lines from the engine log for the web app's Log Stream tab.
+
+    With no `after`, or when the file has shrunk since the last read, it returns the latest complete tail. With
+    `after`, it returns only what appeared after that byte offset.  A line still being written is not returned:
+    the cursor stops at the end of the last complete line, so the next read picks it up whole.
+    """
+    def respond(cursor: int, lines: list[str], available: bool) -> dict:
+        return {"available": available, "file": Path(log_path).name if log_path else None,
+                "cursor": max(0, int(cursor)), "lines": lines}
+
+    if not log_path:
+        return respond(0, [], False)
+    try:
+        after = None if after is None else int(after)
+    except (TypeError, ValueError):
+        after = None
+    try:
+        max_bytes = max(1, int(max_bytes))
+    except (TypeError, ValueError):
+        max_bytes = LOG_STREAM_MAX_BYTES
+    try:
+        size = os.path.getsize(log_path)
+    except OSError:
+        return respond(after or 0, [], False)
+
+    use_cursor = after is not None and 0 <= after <= size
+    start = after if use_cursor else max(0, size - max_bytes)
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(start)
+            data = f.read(max_bytes)
+    except OSError:
+        return respond(start, [], False)
+
+    if not use_cursor and start > 0:              # a tail started mid-line: show complete lines only
+        cut = data.find(b"\n")
+        if cut >= 0:
+            data = data[cut + 1:]
+            start += cut + 1
+    cut = data.rfind(b"\n")
+    if cut < 0:
+        return respond(start, [], True)
+    data = data[:cut + 1]
+    lines = [line.rstrip() for line in data.decode("utf-8", "replace").splitlines()]
+    return respond(start + len(data), lines, True)
+
+
 def echo_requests(log_path: str, offset: int) -> None:
     """STRATA_REQUEST_LINES=1: one stdout line per finished request, from the engine's own summary in its log.
 
@@ -2697,6 +2748,10 @@ class Service:
                 "hardware_static":
                 tel["static"], "history": tel["history"], "time": now}
 
+    def logs(self, after=None) -> dict:
+        """GET /logs: the engine log stream the web app's Log Stream tab reads."""
+        return engine_log_stream(getattr(self.engine, "log_path", None), after)
+
     def v1_status(self) -> dict:
         """GET /v1/status: what this server is and does, for a client that would rather ask than guess (a front-end
         that polls its OpenAI-compatible server's status, collabosm's for one): the model and its window, images,
@@ -3881,10 +3936,12 @@ def make_handler(svc: Service):
                 self.wfile.write(body)
                 return
             if path.startswith("/web/"):
-                # the web app's own files (serve/web): styles, script, icon sprite - same origin, no CDN
+                # the web app's own files (serve/web): styles, script, icon sprite, and any picture it shows -
+                # same origin, no CDN.  Only these extensions are answered; what is in the file is not looked at.
                 name = path[len("/web/"):]
                 types = {".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
-                         ".svg": "image/svg+xml"}
+                         ".svg": "image/svg+xml", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                         ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif"}
                 f = ROOT / "serve" / "web" / name
                 ext = os.path.splitext(name)[1]
                 if "/" in name or "\\" in name or ext not in types or not f.is_file():
@@ -3911,6 +3968,11 @@ def make_handler(svc: Service):
                                {"error": {"message": "request no longer retained"}} if records is None else
                                records if request_id else {"requests": records, "retention": 100, "persistent": False,
                                                           "loaded": svc.loaded(), "auto_load": hasattr(svc.engine, "restart")})
+                return
+            if path == "/logs":
+                if self._authorized():
+                    after = parse_qs(urlsplit(self.path).query).get("after", [None])[0]
+                    self._json(200, svc.logs(after))
                 return
             if path == "/settings":
                 if self._authorized():

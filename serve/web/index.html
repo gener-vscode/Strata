@@ -25,6 +25,8 @@
       <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-chat"/></svg>Chat</button>
     <button class="st-tab" role="tab" id="tab-btn-monitor" aria-controls="view-monitor" aria-selected="false" data-tab="monitor">
       <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-activity"/></svg>Monitor</button>
+    <button class="st-tab" role="tab" id="tab-btn-logs" aria-controls="view-logs" aria-selected="false" data-tab="logs">
+      <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-log"/></svg>Log Stream</button>
     <button class="st-tab" role="tab" id="tab-btn-about" aria-controls="view-about" aria-selected="false" data-tab="about">
       <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-info"/></svg>About</button>
   </nav>
@@ -145,9 +147,30 @@
           (in this page's chat only; switch it off in Sampling).</p>
       </div>
     </div>
-  </section>
-
-  <!-- ============================ About ============================ -->
+    </section>
+    
+    <!-- ============================ Log Stream ============================ -->
+    <section class="view view--logs" id="view-logs" role="tabpanel" aria-labelledby="tab-btn-logs" hidden>
+      <div class="logs">
+        <div class="st-card log-card">
+          <div class="log-head">
+            <span class="card-title">Log stream</span>
+            <label class="toggle-row log-follow"><span>Follow</span>
+              <button class="st-toggle" id="log-follow" role="switch" aria-checked="true"
+                aria-label="Show new log lines"></button></label>
+            <div class="log-actions">
+              <button class="st-btn st-btn--secondary" id="log-copy" type="button">Copy</button>
+              <button class="st-btn st-btn--secondary" id="log-clear-view" type="button">Clear view</button>
+              <button class="st-btn st-btn--secondary" id="log-reset-tail" type="button">Refresh tail</button>
+            </div>
+          </div>
+          <p class="muted small" id="log-status" role="status">Connecting to the engine log…</p>
+          <pre id="log-stream" class="log-stream" tabindex="0" aria-label="Engine log stream"></pre>
+        </div>
+      </div>
+    </section>
+    
+    <!-- ============================ About ============================ -->
   <section class="view view--about" id="view-about" role="tabpanel" aria-labelledby="tab-btn-about" hidden>
     <div class="about">
       <div class="st-card">

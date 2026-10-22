@@ -2233,6 +2233,37 @@ class WebApp(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(self.get(path)[0], 404)
 
+    def test_a_picture_in_the_app_directory_is_served(self):
+        # serve/web is the app's own directory, so a picture added there is answered like its styles and script,
+        # with the Content-Type of its extension; the bytes are each format's magic number and nothing more.
+        pictures = {".jpg": (b"\xff\xd8\xff\xe0", "image/jpeg"), ".jpeg": (b"\xff\xd8\xff\xe0", "image/jpeg"),
+                    ".png": (b"\x89PNG\r\n\x1a\n", "image/png"), ".webp": (b"RIFF0000WEBP", "image/webp"),
+                    ".gif": (b"GIF89a", "image/gif")}
+        written = []
+        try:
+            for ext, (body, want) in pictures.items():
+                f = ROOT / "serve" / "web" / ("test-picture" + ext)
+                f.write_bytes(body)
+                written.append(f)
+                with self.subTest(path="/web/test-picture" + ext):
+                    code, ctype, got = self.get("/web/test-picture" + ext)
+                    self.assertEqual(code, 200)
+                    self.assertIn(want, ctype)
+                    self.assertEqual(got, body)
+            other = ROOT / "serve" / "web" / "test-picture.tiff"   # a format this route does not answer, even
+            other.write_bytes(b"II*\x00")                          # when the file is really there
+            written.append(other)
+            self.assertEqual(self.get("/web/test-picture.tiff")[0], 404)
+            self.svc.dashboard = "/ui"                             # a picture moves with the app, like its files
+            try:
+                self.assertEqual(self.get("/ui/web/test-picture.jpg")[0], 200)
+                self.assertEqual(self.get("/web/test-picture.jpg")[0], 404)   # not at the old address
+            finally:
+                self.svc.dashboard = ""
+        finally:
+            for f in written:
+                f.unlink(missing_ok=True)
+
     def test_metrics(self):
         data = json.dumps({"model": "m", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 5}).encode()
         urllib.request.urlopen(urllib.request.Request(self.base + "/v1/chat/completions", data=data,
