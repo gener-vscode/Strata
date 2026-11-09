@@ -1,0 +1,50 @@
+{
+ "exe": "/home/tommy/repo/Strata/engine/strata",
+ "args": [
+  "--pack",
+  "/home/tommy/repo/Strata-data/packs/unsloth-ud-iq1_m",
+  "--native",
+  "/home/tommy/repo/Strata-data/models/unsloth-UD-IQ1_M/Qwen3.8-Flash-Next-UD-IQ1_M-00001-of-00003.gguf",
+  "--expert-profile",
+  "/home/tommy/repo/Strata/data/expert-profile.bin",
+  "--expert-cache",
+  "auto",
+  "--prefill",
+  "auto",
+  "--spec",
+  "4",
+  "--spec-min-p",
+  "0.5",
+  "--mtp",
+  "/home/tommy/repo/Strata-data/mtp/rt",
+  "--max-context",
+  "131072",
+  "--kv",
+  "q4_0",
+  "--vision",
+  "--resident-experts"
+ ],
+ "cwd": "/home/tommy/repo/Strata",
+ "tokenizer": "/home/tommy/repo/Strata-data/packs/unsloth-ud-iq1_m/tokenizer",
+ "model_name": "qwen3.8-flash-next-unsloth-ud-iq1_m",
+ "log": "/home/tommy/repo/Strata/strata-unsloth-ud-iq1_m.log",
+ "lib_dirs": [
+  "/opt/rocm/lib"
+ ],
+ "port": 8080,
+ "host": "0.0.0.0",
+ "dashboard": "/ui",
+"landing": "#monitor",
+ "backend": "hip",
+ "env": {
+  "STRATA_HIPBLASLT_TUNING": "/home/tommy/repo/Strata/tools/hip/gfx1100-hipblaslt-100202.txt"
+ },
+ "vision": {
+  "exe": "/home/tommy/repo/Strata/engine/strata-vision",
+  "mmproj": "/home/tommy/repo/Strata-data/models/mmproj-Qwen3.8-Flash-Next-BF16.gguf",
+  "model": "/home/tommy/repo/Strata-data/models/unsloth-UD-IQ1_M/Qwen3.8-Flash-Next-UD-IQ1_M-00001-of-00003.gguf",
+  "gpu": false,
+  "max_tokens": 1024,
+  "threads": 16
+ }
+}
