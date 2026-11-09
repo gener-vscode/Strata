@@ -706,13 +706,15 @@ def anthropic_to_messages(req: dict, think_unasked: bool = True) -> tuple[list[d
             elif kind == "thinking":
                 reasoning.append(block.get("thinking", ""))
             elif kind == "tool_use":
-                calls.append({"function": {"name": block.get("name"), "arguments": tool_arguments(block.get("input"))}})
+                calls.append({"function": {"name": block.get("name"), "arguments": tool_arguments(block.get("input"))},
+                              "_call_id": block.get("id")})
             elif kind == "tool_result":
                 # A tool's image (Claude Code's Read of a picture) reaches the encoder like a user's, as the OpenAI
                 # path's tool messages already do; a text-only result is one string, as before.
                 messages.append({"role": "tool", "content": _parts_of(_check_parts(
                     _tool_references(block.get("content"), deferred),
-                    f"messages[{i}].content[{j}].content", TEXT_PARTS + IMAGE_PARTS))})
+                    f"messages[{i}].content[{j}].content", TEXT_PARTS + IMAGE_PARTS)),
+                                 "_call_id": block.get("tool_use_id")})
         if text or calls or reasoning or parts:
             # an image sent beside tool results stays in this turn instead of being dropped
             out = {"role": m["role"], "content": _parts_of(parts) if _has_image(parts) else "".join(text)}
@@ -721,6 +723,8 @@ def anthropic_to_messages(req: dict, think_unasked: bool = True) -> tuple[list[d
             if calls:
                 out["tool_calls"] = calls
             messages.append(out)
+    # A client may send results in the order its tools finished (Claude Code does for parallel calls)
+    _order_chat_tool_results(messages)
     tools = [_anthropic_tool(t) for t in declared if t["name"] not in deferred] or None
     kwargs = {}
     # Anthropic: "thinking": {"type": "disabled"} or {"type": "enabled", "budget_tokens": N};
@@ -775,6 +779,15 @@ FUNC_END = "</function>"
 # #3441: the opener a model writes when it drifts by a token inside the envelope the template documents:
 # `<=NAME>` (the word `function` dropped), `<function:NAME>`, `<function =NAME>`, or the bare `<NAME>`
 _LOOSE_OPEN = re.compile(r"<\s*(?:function\s*[=:]\s*|=\s*)?([A-Za-z0-9_.\-]+)\s*>")
+_PREFIX_LOOKBACK = 256     # how far before a new delta a prefixed name or a misspelt opener can start (see OutputParser._prefixed)
+# #5409: `<function=tools actio>` / `<function=tools>`; the prefixes are the ones of #4751
+_PREFIX_SPACED = re.compile(r"(<function=\s*(?:tools|functions|default_api)[ \t]+)([^<>\s]+)\s*>")
+_PREFIX_PART = re.compile(r"<function=\s*(?:tools|functions|default_api)[ \t]+[^<>\s]{0,80}\s*$")
+_PREFIX_BARE = re.compile(r"(<tool_call>\s*)<function=\s*(tools|functions|default_api)\s*>(.*?)</function>", re.S)
+_PREFIX_BARE_OPEN = re.compile(r"<tool_call>\s*<function=\s*(tools|functions|default_api)\s*>(?!.*</function>)", re.S)
+# #5276: `<toolcall>` / `<tool-call>` as the opener (then whitespace, `<function=NAME>`), and such an opener still arriving
+_MISSPELT_OPEN = re.compile(r"<tool-?call>(\s*)<function=(\s*[^<>\s]+\s*)>")
+_MISSPELT_PART = re.compile(r"<tool-?call>\s*<function=[^<>]{0,80}$|<tool-?call>\s*(?:<(?:f(?:u(?:n(?:c(?:t(?:i(?:o(?:n)?)?)?)?)?)?)?)?)?$")
 _LOOSE_PART = re.compile(r"<\s*(?:function[ \t]*[=:]?\s*|=\s*)?[A-Za-z0-9_.\-]*\s*$")
 
 
@@ -915,8 +928,8 @@ def forced_call(tool_choice, tools: list[dict] | None) -> str | None:
         return None
     if kind == "required" and len(names) == 1:     # one tool to call: name it, the model cannot invent another
         kind, name = "named", next(iter(names))
-    if kind == "required" and names:
-        return CALL_START + "\n<function="
+    if kind == "required" and names:               # the model writes "<function=NAME>": from a written "<function=", Qwen3.8 went on with names no tool has
+        return CALL_START + "\n"
     if kind == "named" and name in names:
         return CALL_START + f"\n<function={name}>\n"
     print(f"[strata] tool_choice {json.dumps(tool_choice)[:200]} is not supported here (or names no tool of the "
@@ -1157,6 +1170,104 @@ def parse_tool_call(body: str, schema: dict | None = None, notes: list | None = 
 RCALL_MAX = 32768        # the most of a `<tool_call>` inside the reasoning that is held while waiting for its end (#804)
 
 
+class _RawValue:
+    """The streaming view of a non-string tool parameter value that is written as JSON.
+
+    Such a value used to be held in full until its `</parameter>` and the tag after it had arrived,
+    because the parser wanted it whole to decode it and re-send it as one piece.  A big `items`
+    array or `taskProgress` list therefore left the stream silent for as long as the model took to
+    write it; a client's idle timeout then ended a healthy request (the keep-alive in serve/server.py
+    for #1666 only stopped the timeout, it did not give the progress back).
+
+    A character goes out only once nothing that can still arrive can change what has already gone
+    out: after a closed string, after a structural character, or after a scalar a delimiter has
+    confirmed.  The whitespace between tokens is dropped, which is what `json.dumps` drops too, so
+    the pieces concatenated parse to the same value as the whole."""
+
+    WS = " \n\r\t"
+    DELIM = " \n\r\t,]}:"
+    HEX = "0123456789abcdefABCDEF"
+
+    def __init__(self):
+        self.str = False        # inside a JSON string; escapes are matched whole, so nothing else
+        self.depth = 0          # nesting of the value's own brackets
+        self.done = False       # the value closed: nothing after it in the buffer is its text
+
+    def piece(self, text: str, final: bool = False) -> tuple[int, str]:
+        """(characters of `text` consumed, the text to send now).  `final` means the value is over:
+        it takes all of `text`, because nothing can arrive after it to change its meaning.  It drops
+        the whitespace between tokens either way, so a value that arrives all at once leaves the
+        stream exactly as one that arrives token by token.  Once the value has closed, nothing more of
+        `text` is its text and nothing more leaves the stream: `param_end` confirms the end as before,
+        so a closing tag can never reach the client as part of the arguments."""
+        if self.done:
+            return 0, ""
+        out: list[str] = []
+        i = 0
+        n = len(text)
+        while i < n:
+            c = text[i]
+            if self.str:
+                if c == "\\":
+                    # An escape goes out whole or not at all.  It must never leave the stream as a
+                    # lone \ or a half-written \uXXXX, and the scanner must not consume the \ alone:
+                    # a \ held back with the string still open would be read as an escaped
+                    # character next time and close the string on its quote, dropping the
+                    # whitespace inside it.
+                    nxt = text[i + 1:i + 2]
+                    if not nxt and not final:
+                        return i, "".join(out)
+                    if nxt == "u":
+                        hexpart = text[i + 2:i + 6]
+                        if not final and (len(hexpart) < 4 or any(ch not in self.HEX for ch in hexpart)):
+                            return i, "".join(out)
+                        take = text[i:i + 6]
+                    else:
+                        take = text[i:i + 2]        # \n, \", \\ ... two characters, or fewer at the end
+                    out.append(take)
+                    i += len(take)
+                    continue
+                out.append(c)
+                i += 1
+                if c == '"':
+                    self.str = False
+                    if not final:
+                        return i, "".join(out)      # the string is whole
+                    continue
+                continue
+            if c in self.WS:
+                i += 1                              # insignificant between tokens
+                continue
+            if c in "{[]},:":                       # every JSON structural character; this set must
+                out.append(c)                       # cover DELIM, or the scalar below would stop
+                i += 1                              # on it without consuming it and never advance
+                if c in "{[":
+                    self.depth += 1
+                elif c in "}]":                     # only a closing bracket ends nesting; a comma or
+                    self.depth -= 1                 # a colon is a boundary too, but it must not close
+                    if self.depth <= 0:             # the value, or it would be cut short at the first
+                        self.done = True            # one of them
+                        return i, "".join(out)      # the value is whole: stop before its closer
+                if not final:
+                    return i, "".join(out)          # a structural character is a boundary
+                continue
+            if c == '"':
+                self.str = True
+                out.append(c)
+                i += 1
+                continue                            # a string goes out as it closes, never before
+            j = i
+            while j < n and text[j] not in self.DELIM:
+                j += 1
+            if j == n and not final:
+                return i, "".join(out)              # the scalar may still be arriving
+            out.append(text[i:j])
+            i = j
+            if not final:
+                return i, "".join(out)              # the scalar is whole; the delimiter goes next round
+        return i, "".join(out)
+
+
 class OutputParser:
     """Incremental parser of the model's text. Feed deltas; get events. A tag split across deltas is held back
     until it is complete, so clients never see `<tool_` or `</thi`."""
@@ -1194,6 +1305,11 @@ class OutputParser:
         for name in self.schemas:
             if isinstance(name, str) and "__" in name:
                 aliases.setdefault(name.replace("__", "_"), set()).add(name)
+                # #5281: a namespaced MCP tool (`mcp__assets__get_asset_info`) written with its last segment only (`get_asset_info`),
+                # as the bare member of a dotted name is accepted above; only when exactly one declared tool ends that way
+                last = name.rsplit("__", 1)[1]
+                if last:
+                    aliases.setdefault(last, set()).add(name)
         # #4751: a programmatic-tool-calling harness (the DeepSeek Harness's PTC mode) shows the model its tools as `tools.write(...)`
         # inside code, and the model then writes the native call with that spelling (`tools.write`, also `functions.write`).  The
         # prefix is not part of the declared name; the same unambiguous-alias rule applies, an exactly declared name always wins.
@@ -1207,7 +1323,8 @@ class OutputParser:
         self.unread_names: list[str] = []   # the names (first few) of those that named a tool the request did not declare
         # stream_tools: a tool call is also reported while it is being written - "tool_start" (its name and id) as
         # soon as the name is known, then "tool_args" pieces of its JSON arguments (string parameters character by
-        # character; other types whole, once complete) - before the final "tool_call".  Without it, a client sees
+        # character, and an array or object at its JSON token boundaries as it is written; a value that does not
+        # open like JSON goes out whole, once complete) - before the final "tool_call".  Without it, a client sees
         # nothing until the call is complete, which for a large file write can be many minutes.
         self.stream_tools = stream_tools
         # #804/#1058: calls found inside the reasoning wait here as [raw text, ToolCall | None] until the turn shows
@@ -1228,19 +1345,31 @@ class OutputParser:
         self.bare = False            # the call being read opened with <function= alone (no <tool_call> around it)
         self.batch = False           # the call being finished is followed by another in the same wrapper
         self._final = False          # #4701: the turn has ended: a call held for what might follow it is decided now
+        self._held = ""              # #5276/#5409: the end of a misspelt opener or a prefixed name still arriving (see _prefixed)
         self._reset_scan()
 
     @property
     def clean(self) -> bool:
         """Nothing is held back: a clean point to stop the thinking at (a parser that rewrites the model's text, as
         serve/dsml.py's does, also counts what it holds)."""
-        return not self.buf
+        return not self.buf and not self._held
 
     def _ok_at(self, p: int) -> bool:
         """self.buf[p] would open a call: at the start of a line, outside a code fence and inline code."""
         snap = self._snap()
         self._track(self.buf[:p])
         ok = self._opener_ok()
+        self._restore(snap)
+        return ok
+
+    def _opens_at(self, p: int) -> bool:
+        """self.buf[p] would open a call as `<tool_call>` does: in the reasoning at the start of a line outside code, in the answer
+        anywhere outside code (a fence, inline code, an indented block)."""
+        if self.state == "reasoning":
+            return self._ok_at(p)
+        snap = self._snap()
+        self._track(self.buf[:p])
+        ok = not self._in_code()
         self._restore(snap)
         return ok
 
@@ -1448,6 +1577,7 @@ class OutputParser:
         self.sfirst = True
         self.sval_started = False
         self.sdeclared = {}
+        self.sraw = None             # the raw value's streaming view: None | _RawValue | "whole"
         self.spname = None
         self.svstart = 0
 
@@ -1507,7 +1637,7 @@ class OutputParser:
                         args('"')
                         self.ss, self.sval_started = "str", False
                     else:
-                        self.ss = "raw"
+                        self.ss, self.sraw = "raw", None
                 elif stripped.startswith("</function>"):
                     self.sp += len("</function>")
                     self.ss = "function_done"
@@ -1544,7 +1674,31 @@ class OutputParser:
             elif self.ss == "raw":
                 end = param_end(rest, self._final, name=self.spname)
                 if end < 0:
-                    return out
+                    if self.sraw is None:
+                        head = rest.lstrip()
+                        if not head:
+                            return out              # the value's first character is still arriving
+                        self.sp += len(rest) - len(head)
+                        # A value that opens like JSON leaves the stream as it is written.  One that
+                        # does not (a bare path for a tool whose schema names no types) still goes
+                        # out whole once complete, exactly as before.
+                        self.sraw = _RawValue() if head[0] in "{[" else "whole"
+                        continue
+                    if not isinstance(self.sraw, _RawValue):
+                        return out                  # not JSON: wait for it to be whole, as before
+                    n, piece = self.sraw.piece(rest)
+                    args(piece)
+                    self.sp += n
+                    if n:
+                        continue              # drain what has arrived: one token per feed falls
+                    return out                # behind and loses the tail, leaving the pieces short
+                if isinstance(self.sraw, _RawValue):
+                    # Most of it left the stream already: send only the tail that had not gone out.
+                    n, piece = self.sraw.piece(rest[:end], final=True)
+                    args(piece)
+                    self.sp += end - n + len(PARAM_END)
+                    self.ss = "between"
+                    continue
                 value = rest[:end]
                 if value.startswith("\n"):
                     value = value[1:]
@@ -1561,6 +1715,17 @@ class OutputParser:
         """Close streamed JSON only after its call boundary has been confirmed."""
         out = []
         if self.scall is None or self.ss == "done":
+            return out
+        if self.ss == "raw" and isinstance(self.sraw, _RawValue):
+            # The value's own brackets are already on the wire and the output ended inside it: send
+            # the rest of it and leave the object open, so the pieces still do not parse as
+            # arguments - the client must be able to tell this from a call it can run (#211).
+            tail = self.buf[self.sp:]
+            n, piece = self.sraw.piece(tail[:len(tail) - self._hold(tail, (PARAM_END,))], final=True)
+            self.sp += n
+            self.ss = "done"
+            if piece:
+                out.append(Event("tool_args", piece, call=self.scall))
             return out
         tail = ""
         if self.ss == "str":
@@ -1590,8 +1755,87 @@ class OutputParser:
                 start = text.find(tag[0], start + 1)
         return best
 
+    def _prefixed(self, fresh: int) -> str:
+        """#5409: a call written `<function=tools NAME>` (a space for the dot of `tools.NAME`) is the call NAME, and one written
+        `<function=tools>` (the bare prefix) is the one declared tool that takes the call's parameters.  Rewrites the complete
+        ones in self.buf to `<function=NAME>` and returns the tail of a call still arriving, which feed() holds back until the next
+        delta.  Only a declared name is ever the result; with none, or with two that fit, the text is left as it was.
+        `fresh`: the length of the text just added; only the end of the buffer (that and a little before it) can hold a new match,
+        so a long call is not scanned again with every token."""
+        held = self._opener(fresh)
+        start = max(0, len(self.buf) - fresh - _PREFIX_LOOKBACK)
+        buf = self.buf[start:]
+        if "<function=" in buf:
+            def spaced(m):
+                name = m.group(2).strip()
+                return f"<function={name}>" if name in self.schemas else m.group(0)
+            buf = _PREFIX_SPACED.sub(spaced, buf)
+            m = _PREFIX_PART.search(buf)
+            if m and not held:
+                held, buf = buf[m.start():], buf[:m.start()]
+            if self.recover:
+                def bare(m):
+                    body = m.group(3)
+                    names = re.findall(r"<parameter=\s*([^<>\s]+?)\s*>", body)
+                    tool = None if m.group(2) in self.schemas else self._tool_by_params(names)
+                    return f"{m.group(1)}<function={tool}>{body}</function>" if tool else m.group(0)
+                buf = _PREFIX_BARE.sub(bare, buf)
+                m = _PREFIX_BARE_OPEN.search(buf)
+                if m and m.group(1) not in self.schemas and not held and len(buf) - m.start() <= RCALL_MAX:
+                    held, buf = buf[m.start():], buf[:m.start()]
+            if buf != self.buf[start:]:
+                self.buf = self.buf[:start] + buf
+        return held
+
+    def _opener(self, fresh: int) -> str:
+        """#5276: `<toolcall>` / `<tool-call>` (the opener written as text, misspelled) followed by `<function=NAME>` of a declared
+        tool is `<tool_call>`, where a `<tool_call>` would open a call (in the reasoning the start of a line, outside code; in the
+        answer outside code).  Prose that names the misspelled tag, or any other follower, is left as it was.  Returns the tail of
+        an opener still arriving (held back by feed)."""
+        start = max(0, len(self.buf) - fresh - _PREFIX_LOOKBACK)
+        if "<tool" not in self.buf[start:]:
+            return ""
+        buf = self.buf
+        pos, out = start, []
+        for m in _MISSPELT_OPEN.finditer(buf, start):
+            name = m.group(2).strip()
+            name = self.aliases.get(name, name)
+            if name in self.schemas and self._opens_at(m.start()):
+                out.append(buf[pos:m.start()] + CALL_START + m.group(1) + FUNC_START + m.group(2) + ">")
+                pos = m.end()
+        buf = buf[:start] + "".join(out) + buf[pos:] if out else buf
+        held = ""
+        m = _MISSPELT_PART.search(buf, start)
+        tail = buf[m.start():] if m else ""
+        if not tail:                                        # the opener itself still arriving: a prefix of `<toolcall>`
+            for k in range(min(len(buf), 11), 5, -1):
+                if any(w.startswith(buf[-k:]) for w in ("<toolcall>", "<tool-call>")) and buf[-k:] != "<tool_":
+                    tail = buf[-k:]
+                    break
+        if tail:
+            held, buf = tail, buf[:len(buf) - len(tail)]
+        self.buf = buf
+        return held
+
+    def _tool_by_params(self, names: list[str]) -> str | None:
+        """The one declared tool whose properties hold every one of `names` and whose required parameters are all in them."""
+        found = []
+        for tname, schema in self.schemas.items():
+            params = (schema or {}).get("parameters") or {}
+            props = params.get("properties") or {}
+            if names and all(n in props for n in names) and all(r in names for r in params.get("required") or []):
+                found.append(tname)
+        return found[0] if len(found) == 1 else None
+
     def feed(self, delta: str) -> list[Event]:
+        if self._held:
+            delta, self._held = self._held + delta, ""
         self.buf += delta
+        if self.schemas and delta:
+            self._held = self._prefixed(len(delta))
+        return self._feed()
+
+    def _feed(self) -> list[Event]:
         out: list[Event] = []
         while True:
             if self.state == "rcall":
@@ -1885,6 +2129,8 @@ class OutputParser:
         how the turn ended: calls waiting from the reasoning become real calls only on a natural stop (None = stop);
         a turn cut by max tokens (or cancelled, or failed) keeps them as reasoning text (#1058)."""
         out = []
+        if self._held:
+            self.buf, self._held = self.buf + self._held, ""
         if self.buf and self.state in ("call", "rcall"):
             self._final = True                  # #4701: a call held after its closing tags (could a file's text go on?) is whole now
             out += self.feed("")
